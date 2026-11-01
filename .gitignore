@@ -1,0 +1,22 @@
+# 忽略專案暫存與建置檔案
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# 忽略程式碼編譯產生的暫存
+.vs/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# 忽略個人設定檔
+/Config/User*
+
+
+# 忽略特定資源資料夾
+Content/Office_Pack_Vol_1/
