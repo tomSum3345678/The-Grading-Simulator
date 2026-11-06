@@ -5,6 +5,10 @@
 	"Description": "",
 	"Plugins": [
 		{
+			"Name": "GradingRuntime",
+			"Enabled": true
+		},
+		{
 			"Name": "DatasmithGLTFImporter",
 			"Enabled": true
 		},
