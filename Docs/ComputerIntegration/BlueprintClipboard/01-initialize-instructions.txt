@@ -1,9 +1,0 @@
-Target: /Game/ComputerDemo/BP_ComputerInteraction.BP_ComputerInteraction
-Graph: EventGraph
-Variables: Desktop (User Widget Object Reference, None); Prompt (User Widget Object Reference, None).
-Components: DefaultSceneRoot.
-Dependencies: WBP_Desktop, WBP_InteractionPrompt.
-Entry: Event BeginPlay (remove only the unused default BeginPlay in the NEW Blueprint first).
-Creates exactly one desktop and prompt per interaction actor. Adds prompt to viewport then hides it.
-Expected: compile without missing variables/references; PIE creates one hidden prompt and one unshown desktop. Later chunks use the stored instances.
-Source: UE 4.27 ObjectExporterT3D of BP_DemoPlayer; original Create, AddToViewport, SetVisibility pins preserved.

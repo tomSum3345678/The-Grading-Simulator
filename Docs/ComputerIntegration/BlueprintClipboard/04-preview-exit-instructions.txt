@@ -1,9 +1,0 @@
-Target: /Game/ComputerDemo/WBP_Desktop.WBP_Desktop
-Graph: OnPreviewKeyDown (create UserWidget override in Unreal Editor first).
-Variables/components: existing Widget Tree; no new variables.
-Parameters: MyGeometry (Geometry), InKeyEvent (KeyEvent), ReturnValue (EventReply), exactly the UE 4.27 UserWidget override signature.
-Paste body only. Remove the unused default Return node. Explicitly connect original function entry execution to Branch execute, and InKeyEvent to GetKey Input. MyGeometry is unused.
-Dependencies: KismetInputLibrary GetKey and EqualEqual_KeyKey; WidgetBlueprintLibrary Handled/Unhandled and SetInputMode_GameOnly; owning PlayerController.
-Escape key serializes as DefaultValue="Escape" per UE 4.27 FKey::ExportTextItem. Do not use (Key=Escape).
-On Escape: release one matching look and movement input lock, hide mouse, set game input, remove desktop, return Handled. Other keys return Unhandled.
-Preview phase handles Escape even with a child score editor focused. Must compile and inspect both entry connections, then test exit, movement, reopening, edited value persistence and rapid repeated input.

@@ -1,8 +1,0 @@
-Target: /Game/ComputerDemo/BP_ComputerInteraction.BP_ComputerInteraction
-Graph: EventGraph
-Variables: Desktop and Prompt (User Widget Object Reference, None); CanInteract (Boolean, false).
-Entry: Event Tick. No external execution wire; consumes stage 01 variables.
-Uses camera location/rotation, a 200 cm Visibility trace, cast HitComponent to StaticMeshComponent, compare StaticMesh with /Game/Office_Pack_Vol_1/Models/SM_Monitor_1.SM_Monitor_1. No actor names or first-instance reference.
-Clears target every tick; failed cast hides prompt. Prompt shown only for target match and desktop absent.
-Verified UE 4.27 signatures: PlayerCameraManager.h GetCameraRotation; KismetMathLibrary.h GetForwardVector(InRot), EqualEqual_ObjectObject(A,B); StaticMeshComponent.h BlueprintReadOnly StaticMesh. Dynamic cast result naming follows K2Node_DynamicCast.cpp. Other nodes from native exports.
-Validation: compile; export and inspect links/types; in game aim at each monitor within/outside 200 cm and at paper. Prompt should not persist after losing hit.

@@ -1,8 +1,0 @@
-Target: /Game/ComputerDemo/BP_ComputerInteraction.BP_ComputerInteraction
-Graph: EventGraph
-Variables: Desktop (User Widget Object Reference), CanInteract (Boolean). Stage 01 and 02 required.
-Class Defaults: Auto Receive Input = Player 0; Block Input = false. Actor will be owned by the current player character through a ChildActorComponent.
-Entry: keyboard E Pressed, Consume Input false. No external execution wire.
-Gate: CanInteract && !Desktop.IsInViewport. Adds the same desktop at ZOrder 10; increments look/move ignore once; shows mouse; sets UI Only with desktop focus.
-Close counterpart must decrement each ignore once, hide mouse, switch Game Only, remove desktop.
-Validation: compilation plus actual E open, UI clicks, exit, repeated E, paper exclusion and all monitor instances.
