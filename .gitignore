@@ -21,5 +21,4 @@ Saved/
 # 忽略特定資源資料夾
 Content/Office_Pack_Vol_1/
 
-# Local computer integration notes and evidence
-/Docs/ComputerIntegration/
+/Docs/
