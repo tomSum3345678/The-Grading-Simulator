@@ -1,0 +1,9 @@
+Target: /Game/ComputerDemo/WBP_Desktop.WBP_Desktop
+Graph: EventGraph. Independent Event OnInitialized entry, once per widget instance.
+Required widget: StudentRows (VerticalBox, Is Variable enabled), existing in migrated WidgetTree. No new asset or Blueprint variable required.
+Dependencies: /Game/DataTable/DT_Students, /Game/DataTable/StudentData, /Game/ComputerDemo/ST_Student, /Game/ComputerDemo/WBP_StudentRow. Load referenced assets/classes before paste.
+Remove the old unconnected Construct event only if it conflicts; do not alter news/home button chains.
+Clear the ten demo children, enumerate current DataTable rows, read each row, adapt StudentID/name, CA_Score to OCA, ExamScore to OEA. HasOEA=true because the current table has an explicit numeric ExamScore (including zero) and no ungraded flag.
+Create WBP_StudentRow with owning player, set its Student struct BEFORE adding to panel; its existing Construct/RefreshRow displays current values. No source DataTable writes. Same desktop instance preserves edits between monitor visits; new game restores DataTable baseline.
+Signatures: existing UE 4.27 exported DataTable/ForEach/CreateWidget/AddChild nodes; PanelWidget.h ClearChildren() BlueprintCallable; K2Node_MakeStruct.cpp output uses StructType->GetFName() and real ST_Student property pins.
+Validation: compile; native export verify DT references, StudentRows binding, struct fields and all execution/data links. In game exactly three current students; numeric validation, edits, close/reopen and cross-monitor persistence; fresh game reset.

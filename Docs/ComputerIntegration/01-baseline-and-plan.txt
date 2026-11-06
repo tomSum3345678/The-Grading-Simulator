@@ -1,0 +1,72 @@
+電腦互動整合：修改前盤點與最小方案
+基準：47b448bf2eb6a5916bed2d14f6b13ad5b19f0871；Git 乾淨。
+UE 4.27 編輯器確認 dirty content packages = []，dirty map packages = []。
+
+證據位置：Saved/ComputerIntegrationAudit
+current-baseline.json / legacy-baseline.json：全部 Content、Config、Plugins 與 uproject 的檔案大小、原始 mtime、SHA256。未改寫任何時間戳。
+current-asset-registry.json / legacy-asset-registry.json：實際 UE Asset Registry 類別、依賴、反向引用。
+current-exports / legacy-exports：UE ObjectExporterT3D 原生匯出；包括節點類別、屬性、Pin 型別、PinId、LinkedTo 與關卡 Actor。
+current-parsed / legacy-parsed、*-flow：匯出內容的結構化解析和逐節點資料／執行流。
+current-details.json / computer-inventory.json：實際 Actor 位置、旋轉、模型、碰撞與 Visibility 回應。
+
+盤點範圍與理解
+目前 961 個 Content 檔案、9 張地圖；124 個邏輯資產匯出成功。107 Blueprint、5 WidgetBlueprint、1 AnimBlueprint、1 Struct、1 DataTable、9 World。
+233 個一般來源 Graph、2136 個節點已解析；另確認第一人稱 AnimGraph 的 Idle/Run/JumpStart/JumpLoop/JumpEnd、IsMoving/bIsInAir 與剩餘時間轉換、Arms Slot。
+裝飾資產的施工 Graph 按實際運算及連線分組分析：燭光可見性、強度、色溫、陰影；塑膠／金屬／玻璃／蠟材質參數；字母數字和鏡子動態材質。未把名稱搜尋視為邏輯確認。
+StarterContent 的 LightStudio 處理太陽、HDRI、天空／大氣／霧、光線遮蔽與陰影施工設定；燈具調整亮度顏色；粒子藍圖無額外事件流程。StarterMap 依序播放兩個 AudioComponent。其他素材關卡 Level Blueprint 為空。
+
+啟動與角色
+DefaultEngine：啟動 MainMenu_Level，預設 FirstPersonGameMode，GameInstance 為原生 GameInstance。
+MainMenu_Level 使用 MainMenuMode，BeginPlay 建立 WBP_MainMenu，AddToViewport，顯示滑鼠。Level Blueprint 另有未接入的建構介面節點，未執行。
+START：聲音 -> 隱藏滑鼠 -> GameOnly -> 0.02 秒 Delay -> OpenLevel /Game/FirstPersonBP/MyLevel/MyLevel -> RemoveFromParent。
+OPTION 沒有功能執行線，僅按下／釋放音效；QUIT 呼叫 QuitGame。
+MyLevel BeginPlay 播放背景音樂。地圖依賴中未發現其他 World 子關卡引用。
+FirstPersonGameMode：FirstPersonCharacter、原生 PlayerController、FirstPersonHUD。
+角色維持 WASD／滑鼠／跳躍／Ctrl 速度切換與 VR 節點；Fire 鍵執行線未接入。Projectile 的 Hit 對模擬物理物件施加衝量後銷毀。HUD 在非 HMD 模式畫準星。
+
+試卷及資料
+角色 Tick：從 PlayerCameraManager 向前 100cm 做 Visibility LineTrace，依 HitActor 的 ExamPaper Tag 設 IsLookingAtPaper 及 PromptWidget 顯隱。
+E：IsLookingAtPaper 為真時建立 WBP_SelectPaper，加入畫面，UIOnly，隱藏提示並顯示滑鼠。
+WBP_SelectPaper Construct：讀 DT_Students row names，建立 WBP_StudentButton，綁定 OnStudentClicked；選擇後建立 WBP_ExamPaper 並傳 StudentRowName，移除選擇介面。取消恢復 GameOnly、隱藏滑鼠。
+WBP_StudentButton 以 StudentName 字串綁定顯示文字，點擊透過 delegate 傳回名稱。
+WBP_ExamPaper：Construct 重設 CurrentPage=1，GetDataTableRow，複製四張圖片進 ExamPages 並顯示第 1 張。Next 在 CurrentPage<4 時遞增，Switch 顯示對應圖片。Close 恢復 GameOnly、滑鼠及提示。
+SetupPaper 存在但目前未見接入呼叫，末端 SetBrushFromTexture 的 Texture 未接入；Q1_Mark Set 沒有執行入口。未發現已完成的試卷評分提交或 SaveGame 寫入流程。
+StudentData 保留姓名、學號、Reference_Number、ExamScore、CA_Score、四張試卷、Q1-Q5、ChatMessage；不改結構或原 DataTable。
+三名學生：Chan Tai Man/41012958/CA62、Li Siu Ming/41121985/CA81、Lee Tai Man/14561234/CA67；ExamScore 均為 0。LiSiuMing 的試卷圖片缺失是既有問題。
+
+舊 ComputerDemo
+BP_Computer：組合式桌子／電腦模型，無有效 EventGraph 互動。
+BP_DemoGameMode：使用 BP_DemoPlayer、原生 PlayerController/HUD，無其他有效事件。
+BP_DemoPlayer BeginPlay：GetActorOfClass 只取第一台 BP_Computer；建立一次 Desktop 和 Prompt。Tick 判距離<=200 且 Desktop 不在 Viewport，再顯示提示。E 加入桌面，IgnoreLook/Move=true，顯示滑鼠，UIOnly 焦點指向 Desktop。
+WBP_Desktop：Apps WidgetSwitcher，首頁／新聞／成績。5 個新聞按鈕更新標題與正文。OnKeyDown 原本計畫比較 Esc，恢復輸入並移除自身，但實際 B Pin 預設值為無效的「(」。
+WBP_StudentRow：Student 值存在每列；Construct RefreshRow，交替背景。OCA/OEA commit 檢查學生 ID、去除前後空格、數字、無小數／正負號、長度<=3、0..100。OEA 可空白，更新 HasOEA，Dirty=true，再刷新。
+舊桌面內嵌 10 個 Demo 學生，不可作為目前學生資料。只遷移介面及必要 Struct，使用目前 DT_Students 填入執行期工作副本。
+
+電腦清單
+MyLevel：12 台，Actor label SM_Monitor_13 至 SM_Monitor_24（內部 Actor 名稱不等於 label，完整表見 computer-inventory.json）。
+一樓：SM_Monitor_13 (-1286,1100,100)、14 (-916,1100,100)。
+二樓：15/16 X=-10，17/18 X=-505，19/20 X=-1010，21/22 X=-1505，23/24 X=-2010；每對 Y=1385/1465，Z=490。
+Office_Pack_Vol_1/DemoMap：另有 12 台；Preview：另有 1 台。其餘 6 張地圖未發現電腦模型實例。
+全部使用同一 SM_Monitor_1；BlockAll、QueryAndPhysics、Visibility=Block；模型有碰撞幾何且 UseComplexAsSimple。
+目前全部場景電腦沒有電腦互動接入。不能只因模型存在就宣稱可用。
+
+已執行的修改前實測
+目前：主選單 START -> MyLevel 成功；電腦未出現操作 UI。試卷提示、E 開啟三人選單、ChanTaiMan 第1至4頁、關閉、再次開啟、取消選擇成功。
+定位使用引擎 BugItGo 作測試準備；實際開啟與翻頁均使用 E 及 UI 按鈕。
+原有選單開啟後，角色 Tick 仍可能重新顯示試卷提示。
+舊項目：提示、E 開啟、首頁／新聞／成績切換、OEA 輸入77並出現已修改成功。Esc 退出失敗。新聞切換後出現多餘引號和字面反斜線 n。
+113 個目前項目的 Blueprint/Widget/AnimBlueprint 批次 Compile 成功。包含引擎素材的廣泛編譯在 Landmass 素材產生 REINST ensure 和 /Script/BPEditorExtension 缺失；不得誤報為本次新增錯誤。
+依賴掃描另發現 FirstPersonExampleMap_BuiltData 缺失；保留原狀。
+
+最小整合方案（此文寫入時尚未修改 Content）
+1. 遷移 WBP_Desktop、WBP_InteractionPrompt、WBP_StudentRow、ST_Student 的依賴閉包；目前無同名路徑，禁止覆蓋。
+2. 用 Editor UI 新建獨立 BP_ComputerInteraction，重用遷移 Widget；共享單一 Desktop 實例。
+3. FirstPersonCharacter 只加入承載該邏輯的元件，不替換角色、GameMode、地圖或試卷 Graph。
+4. 用相機射線命中的實際 StaticMesh 比較與距離識別電腦；不依賴任一 Actor 名稱、不取第一台。
+5. UI 開啟條件互斥、重複開啟保護；焦點與輸入鎖成對恢復；Esc 在子控制項持有焦點時仍能退出。
+6. 學生資料讀目前 DT_Students：姓名/ID 原樣；CA_Score -> OCA、ExamScore -> OEA。原表無 HasOEA 欄位，原整數0顯示為0，不推斷為缺值。執行期編輯保留於重用介面，不寫回原資產、不擅自加入磁碟存檔。
+7. 每段 Graph 文字保存獨立檔案及接入說明，貼入後查 Pin/線/引用、編譯，再測一台；通過後覆蓋全部遊戲電腦並逐台記錄。
+
+尚未驗證
+所有 25 台整合後互動均尚未實測。素材示範關卡全部視覺／粒子執行效果、VR／行動裝置、打包版本尚未逐項測試。這些不列為通過。
+不執行 Phase1Builder；未直接改二進位；未提交／推送／合併／刪分支。
