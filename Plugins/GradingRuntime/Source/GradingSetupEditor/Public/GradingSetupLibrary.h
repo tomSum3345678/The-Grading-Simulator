@@ -27,4 +27,8 @@ public:
     /** Installs Options menu entry points, presentation hooks and audio routing. */
     UFUNCTION(BlueprintCallable, Category="Grading|Setup")
     static FString InstallOptions();
+
+    /** Builds the academic-integrity Blueprint bar and wires it to the Day 2 elevator. */
+    UFUNCTION(BlueprintCallable, Category="Grading|Setup")
+    static FString InstallAcademicIntegrity();
 };
