@@ -4,6 +4,18 @@ Welcome to **The Grading Simulator** repository. Follow the setup instructions b
 
 ---
 
+## 🛠️ Prerequisites
+
+Because this project contains custom C++ code, you **may have to** install the following before attempting to build or open the project:
+
+1.  **Unreal Engine 4.27.2** (Installed via Epic Games Launcher).
+2.  **Visual Studio 2022** (or 2019).
+    *   During installation, ensure the **"Game development with C++"** workload is checked.
+    *   Ensure the **"Unreal Engine installer"** component is selected in the Visual Studio Installer.
+3.  **.NET Framework** (usually installed automatically with Visual Studio).
+
+---
+
 ## ⚠️ CRITICAL: Required Project Assets
 
 This project requires external assets hosted on Fab. You **must** download and install this package before opening any levels in the Unreal Editor, or references within the map will break permanently.
