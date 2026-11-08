@@ -104,7 +104,7 @@ bool FProfessorSaveRoundTripTest::RunTest(const FString& Parameters)
     Existing.ReferenceNumber = TEXT("Student1");
     Existing.StudentName = TEXT("Example Student");
     Existing.StudentID = TEXT("41000001");
-    Existing.OCA = 62;
+    Existing.OCA = 62.25f;
     Existing.OEA = 76;
     Existing.bHasOEA = true;
     Existing.ExpectedScore = 60;
@@ -218,7 +218,7 @@ bool FProfessorDiskRoundTripTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Student identity survives disk reload"), Loaded->Students[0].RowName, Student.RowName);
     TestEqual(TEXT("Student name survives disk reload"), Loaded->Students[0].StudentName, Student.StudentName);
     TestEqual(TEXT("Student ID survives disk reload"), Loaded->Students[0].StudentID, Student.StudentID);
-    TestEqual(TEXT("OCA survives disk reload"), Loaded->Students[0].OCA, 50);
+    TestEqual(TEXT("OCA survives disk reload"), Loaded->Students[0].OCA, 50.f);
     TestEqual(TEXT("OEA survives disk reload"), Loaded->Students[0].OEA, 70);
     TestTrue(TEXT("Entered OEA remains present"), Loaded->Students[0].bHasOEA);
     TestFalse(TEXT("Missing OEA remains missing"), Loaded->Students[1].bHasOEA);

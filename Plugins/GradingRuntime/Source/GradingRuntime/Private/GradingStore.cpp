@@ -13,21 +13,7 @@
 
 namespace
 {
-    const FString SaveSlot(TEXT("ProfessorGrades_v1"));
-    const FString BackupSlot(TEXT("ProfessorGrades_v1_Backup"));
 
-    bool AuthoredTableIsNewer(const UDataTable* Table)
-    {
-#if WITH_EDITOR
-        if (!Table || !Table->GetOutermost()) return false;
-        const FString AssetPath = FPackageName::LongPackageNameToFilename(Table->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension());
-        const FString SavedPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("SaveGames"), SaveSlot + TEXT(".sav"));
-        IFileManager& Files = IFileManager::Get();
-        if (Files.FileExists(*AssetPath) && Files.FileExists(*SavedPath))
-            return Files.GetTimeStamp(*AssetPath) > Files.GetTimeStamp(*SavedPath);
-#endif
-        return false;
-    }
 
     // User-defined struct fields have a generated suffix; match the authored prefix.
     FProperty* FindField(const UStruct* Struct, const FString& Name)
@@ -61,6 +47,49 @@ namespace
                 : static_cast<int32>(Property->GetFloatingPointPropertyValue(Value));
         }
         return Fallback;
+    }
+
+    float ReadOCA(const UStruct* Struct, const uint8* Row)
+    {
+        if (FNumericProperty* Property = CastField<FNumericProperty>(FindField(Struct, TEXT("CA_Score"))))
+        {
+            const void* Value = Property->ContainerPtrToValuePtr<void>(Row);
+            return Property->IsInteger() ? static_cast<float>(Property->GetSignedIntPropertyValue(Value))
+                : static_cast<float>(Property->GetFloatingPointPropertyValue(Value));
+        }
+        return 0.f;
+    }
+
+    bool CanStoreOCA(const UDataTable* Table, const TArray<FProfessorStudent>& Students, FString& Error)
+    {
+        const UScriptStruct* Struct = Table ? Table->GetRowStruct() : nullptr;
+        const FProperty* Property = Struct ? FindField(Struct, TEXT("CA_Score")) : nullptr;
+        if (CastField<FFloatProperty>(Property)) return true;
+        if (CastField<FIntProperty>(Property))
+        {
+            for (const FProfessorStudent& Student : Students)
+            {
+                // Never silently truncate a decimal while the authored table still uses int32.
+                if (!FMath::IsFinite(Student.OCA) || Student.OCA != FMath::TruncToFloat(Student.OCA))
+                {
+                    Error = TEXT("CA_Score is still Integer. Change StudentData.CA_Score to Float before saving decimal OCA.");
+                    return false;
+                }
+            }
+            return true;
+        }
+        Error = TEXT("Student DataTable CA_Score must be Integer or Float.");
+        return false;
+    }
+
+    void WriteOCA(const UStruct* Struct, uint8* Row, float Value)
+    {
+        // ApplySavedRecordsToTable preflights CanStoreOCA before any row mutation.
+        FProperty* Property = FindField(Struct, TEXT("CA_Score"));
+        if (FFloatProperty* FloatProperty = CastField<FFloatProperty>(Property))
+            FloatProperty->SetPropertyValue_InContainer(Row, Value);
+        else if (FIntProperty* IntProperty = CastField<FIntProperty>(Property))
+            IntProperty->SetPropertyValue_InContainer(Row, static_cast<int32>(Value));
     }
 
     bool ReadBool(const UStruct* Struct, const uint8* Row, const FString& Name, bool Fallback)
@@ -178,11 +207,12 @@ namespace
             S.StudentName = ReadString(Struct, Pair.Value, TEXT("StudentName"));
             S.StudentID = ReadString(Struct, Pair.Value, TEXT("StudentID"));
             S.ReferenceNumber = ReadString(Struct, Pair.Value, TEXT("Reference_Number"));
-            S.OCA = ReadNumber(Struct, Pair.Value, TEXT("CA_Score"));
+            S.OCA = ReadOCA(Struct, Pair.Value);
             S.OEA = ReadNumber(Struct, Pair.Value, TEXT("ExamScore"));
             S.bHasOEA = ReadBool(Struct, Pair.Value, TEXT("HasOEA"), true);
             S.ExpectedScore = ReadNumber(Struct, Pair.Value, TEXT("ExpectedScore"), -1);
             S.bHasExpectedScore = S.ExpectedScore >= 0 && S.ExpectedScore <= 100;
+            S.PaperReference = S.ReferenceNumber;
             Result.Add(S);
         }
         return Result;
@@ -258,19 +288,10 @@ void UGradingStore::Initialize(FSubsystemCollectionBase& Collection)
 
 void UGradingStore::Deinitialize()
 {
-    // PIE shares editor asset objects. Restore the original authored table when the session ends.
-    if (SourceTable && EditorTableSnapshot && SourceTable->GetRowStruct() == EditorTableSnapshot->GetRowStruct())
-    {
-        SourceTable->EmptyTable();
-        for (const TPair<FName, uint8*>& Pair : EditorTableSnapshot->GetRowMap())
-        {
-            SourceTable->AddRow(Pair.Key, *reinterpret_cast<const FTableRowBase*>(Pair.Value));
-        }
-        SourceTable->HandleDataTableChanged();
-        StoreSequence(SourceTable, ReadSequence(EditorTableSnapshot));
-    }
-    EditorTableSnapshot = nullptr;
     SourceTable = nullptr;
+    InitialTable = nullptr;
+    Records.Empty();
+    bInitialized = false;
     bLoggedIn = false;
     Super::Deinitialize();
 }
@@ -300,10 +321,29 @@ void UGradingStore::Logout()
     bLoggedIn = false;
 }
 
-FProfessorGrade UGradingStore::CalculateGrade(int32 OCA, int32 OEA, bool bHasOEA)
+bool UGradingStore::TryParseOCA(const FString& Raw, float& OutOCA)
+{
+    OutOCA = 0.f;
+    const FString Value = Raw.TrimStartAndEnd();
+    bool bDot = false;
+    bool bDigit = false;
+    for (TCHAR Character : Value)
+    {
+        if (Character >= TEXT('0') && Character <= TEXT('9')) bDigit = true;
+        else if (Character == TEXT('.') && !bDot) bDot = true;
+        else return false;
+    }
+    if (!bDigit) return false;
+    const double Number = FCString::Atod(*Value);
+    if (!FMath::IsFinite(Number) || Number < 0.0 || Number > 100.0) return false;
+    OutOCA = static_cast<float>(Number);
+    return true;
+}
+
+FProfessorGrade UGradingStore::CalculateGrade(float OCA, int32 OEA, bool bHasOEA)
 {
     FProfessorGrade Result;
-    if (!bHasOEA) return Result;
+    if (!bHasOEA || !FMath::IsFinite(OCA) || OCA < 0.f || OCA > 100.f || OEA < 0 || OEA > 100) return Result;
     Result.bGraded = true;
     Result.Total = .5f * OCA + .5f * OEA;
     if (OCA < 50 || OEA < 50 || Result.Total < 60.f)
@@ -357,9 +397,9 @@ bool UGradingStore::ValidateRecords(const TArray<FProfessorStudent>& Candidate, 
             }
             RowNames.Add(Student.RowName);
         }
-        if (Student.OCA < 0 || Student.OCA > 100 || (Student.bHasOEA && (Student.OEA < 0 || Student.OEA > 100)))
+        if (!FMath::IsFinite(Student.OCA) || Student.OCA < 0.f || Student.OCA > 100.f || (Student.bHasOEA && (Student.OEA < 0 || Student.OEA > 100)))
         {
-            Error = TEXT("OCA and OEA must be whole numbers from 0 to 100.");
+            Error = TEXT("OCA must be a finite number from 0 to 100; entered OEA must be a whole number from 0 to 100.");
             return false;
         }
         if (Student.bHasExpectedScore && (Student.ExpectedScore < 0 || Student.ExpectedScore > 100))
@@ -374,7 +414,7 @@ bool UGradingStore::ValidateRecords(const TArray<FProfessorStudent>& Candidate, 
 
 bool UGradingStore::ValidateSave(const UProfessorGradeSave* Saved, FString& Error)
 {
-    if (!Saved || Saved->FormatVersion != 1)
+    if (!Saved || (Saved->FormatVersion != 1 && Saved->FormatVersion != 2))
     {
         Error = TEXT("Unsupported or unreadable grade save.");
         return false;
@@ -422,160 +462,192 @@ void UGradingStore::RestoreAuthoritativeScores(TArray<FProfessorStudent>& Candid
 void UGradingStore::InitializeRecords(UDataTable* InTable)
 {
     if (bInitialized) return;
-    SourceTable = InTable;
-    if (!SourceTable || !SourceTable->GetRowStruct())
-    {
-        LastError = TEXT("Student data could not be loaded.");
-        return;
-    }
-    bInitialized = true;
-#if WITH_EDITOR
-    if (GIsEditor)
-    {
-        EditorTableSnapshot = DuplicateObject<UDataTable>(SourceTable, this);
-        StoreSequence(EditorTableSnapshot, ReadSequence(SourceTable));
-    }
-#endif
-    const TArray<FProfessorStudent> LegacyRows = ReadStudents(SourceTable);
-    UDataTable* Baseline = DuplicateObject<UDataTable>(SourceTable, GetTransientPackage());
-    StoreSequence(Baseline, ReadSequence(SourceTable));
-    bool Changed = false;
-    if (!NormalizeStudentTable(Baseline, Changed, LastError)) { bInvalidSave = true; return; }
-    Records = ReadStudents(Baseline);
-    NextReferenceNumber = ReadSequence(Baseline);
-    for (const FProfessorStudent& Student : Records) AuthoritativeRows.Add(Student.RowName, Student);
+    InitialTable = InTable;
+    StartNewSession(LastError);
+}
 
-    if (UGameplayStatics::DoesSaveGameExist(SaveSlot, 0))
+bool UGradingStore::StartNewSession(FString& Error)
+{
+    if (!InitialTable || !InitialTable->GetRowStruct()) { Error = TEXT("Initial student data is unavailable."); return false; }
+    UDataTable* Baseline = DuplicateObject<UDataTable>(InitialTable, GetTransientPackage());
+    Baseline->SetFlags(RF_Transient);
+    Baseline->ClearFlags(RF_Public | RF_Standalone);
+    StoreSequence(Baseline, ReadSequence(InitialTable));
+    bool Changed = false;
+    if (!NormalizeStudentTable(Baseline, Changed, Error)) return false;
+    TArray<FProfessorStudent> Initial = ReadStudents(Baseline);
+    const UScriptStruct* Struct = Baseline->GetRowStruct();
+    FArrayProperty* Labs = CastField<FArrayProperty>(FindField(Struct, TEXT("LabLateDays")));
+    FIntProperty* LateDay = Labs ? CastField<FIntProperty>(Labs->Inner) : nullptr;
+    if (!Labs || !LateDay) { Error = TEXT("Initial lab details are missing."); return false; }
+    for (FProfessorStudent& Student : Initial)
     {
-        UProfessorGradeSave* Saved = Cast<UProfessorGradeSave>(UGameplayStatics::LoadGameFromSlot(SaveSlot, 0));
-        FString ValidationError;
-        if (!ValidateSave(Saved, ValidationError))
+        const uint8* Row = Baseline->FindRowUnchecked(Student.RowName);
+        FScriptArrayHelper Values(Labs, Labs->ContainerPtrToValuePtr<void>(Row));
+        if (Values.Num() != 10) { Error = TEXT("Each initial student needs ten labs: ") + Student.ReferenceNumber; return false; }
+        float LabTotal = 0.f;
+        for (int32 I = 0; I < Values.Num(); ++I)
         {
-            bInvalidSave = true;
-            LastError = TEXT("Saved grades could not be read. The existing save is protected; restore its backup before saving.");
-            return;
+            const int32 Days = LateDay->GetPropertyValue(Values.GetRawPtr(I));
+            if (Days < 0) { Error = TEXT("Initial lab lateness cannot be negative."); return false; }
+            LabTotal += Days == 0 ? 1.f : (Days <= 5 ? (6 - Days) * .1f : 0.f);
         }
-        NextReferenceNumber = FMath::Max(NextReferenceNumber, Saved->NextReferenceNumber);
-        for (const FString& Ref : Saved->DeletedReferenceNumbers) NextReferenceNumber = FMath::Max(NextReferenceNumber, ReferenceIndex(Ref) + 1);
-        for (const FProfessorStudent& S : Saved->Students) NextReferenceNumber = FMath::Max(NextReferenceNumber, ReferenceIndex(S.ReferenceNumber) + 1);
-        // Editor/Standalone development respects explicitly saved DataTable edits.
-        // Cooked builds always restore the durable player save.
-        if (AuthoredTableIsNewer(SourceTable))
+        float Scores[3]; const TCHAR* Names[] = {TEXT("Assignment1Score"), TEXT("Assignment2Score"), TEXT("MidtermScore")};
+        for (int32 I = 0; I < 3; ++I)
         {
-            CopyRows(SourceTable, Baseline);
-            ApplyToDataTable();
-            return;
+            FNumericProperty* P = CastField<FNumericProperty>(FindField(Struct, Names[I]));
+            if (!P) { Error = TEXT("Initial assessment score is missing."); return false; }
+            const void* V = P->ContainerPtrToValuePtr<void>(Row);
+            Scores[I] = P->IsInteger() ? static_cast<float>(P->GetSignedIntPropertyValue(V)) : static_cast<float>(P->GetFloatingPointPropertyValue(V));
+            if (!FMath::IsFinite(Scores[I]) || Scores[I] < 0.f || Scores[I] > 100.f) { Error = TEXT("Invalid initial assessment score."); return false; }
         }
-        DeletedReferenceNumbers = Saved->DeletedReferenceNumbers;
-        for (FName DeletedName : Saved->DeletedRowNames)
-        {
-            const FProfessorStudent* Legacy = LegacyRows.FindByPredicate([DeletedName](const FProfessorStudent& S) { return S.RowName == DeletedName; });
-            const FProfessorStudent* Identity = Records.FindByPredicate([&Legacy, DeletedName](const FProfessorStudent& S) { return S.ReferenceNumber == DeletedName.ToString() || (Legacy && S.StudentID == Legacy->StudentID); });
-            if (Identity) DeletedReferenceNumbers.AddUnique(Identity->ReferenceNumber);
-            else DeletedRowNames.AddUnique(DeletedName);
-        }
-        if (!ApplySavedRecordsToTable(SourceTable, Saved, LastError)) { bInvalidSave = true; return; }
-        Records = ReadStudents(SourceTable);
-        NextReferenceNumber = FMath::Max(NextReferenceNumber, ReadSequence(SourceTable));
-        return;
+        Student.OCA = 2.f * (LabTotal + Scores[0] * .1f + Scores[1] * .1f + Scores[2] * .2f);
     }
-    CopyRows(SourceTable, Baseline);
-    ApplyToDataTable();
+    const int32 Next = ReadSequence(Baseline);
+    if (!ValidateRecords(Initial, Error)) return false;
+    UDataTable* Working = nullptr;
+    if (!BuildSessionTable(Initial, Next, Working, Error)) return false;
+    SourceTable = Working;
+    Records = MoveTemp(Initial);
+    NextReferenceNumber = Next;
+    AuthoritativeRows.Empty();
+    for (const auto& Student : Records) AuthoritativeRows.Add(Student.RowName, Student);
+    DeletedRowNames.Empty(); DeletedReferenceNumbers.Empty();
+    bInitialized = true; bInvalidSave = false; bLoggedIn = false;
+    LastError.Empty(); Error.Empty();
+    UE_LOG(LogTemp, Display, TEXT("STAGE4 NEW SESSION students=%d next=%d"), Records.Num(), NextReferenceNumber);
+    return true;
+}
+
+bool UGradingStore::BuildSessionTable(const TArray<FProfessorStudent>& Students, int32 Next, UDataTable*& Result, FString& Error) const
+{
+    Result = nullptr;
+    if (!InitialTable || !InitialTable->GetRowStruct()) { Error = TEXT("Initial student schema is unavailable."); return false; }
+    UDataTable* Working = DuplicateObject<UDataTable>(InitialTable, GetTransientPackage());
+    Working->SetFlags(RF_Transient); Working->ClearFlags(RF_Public | RF_Standalone);
+    Working->EmptyTable();
+    const UScriptStruct* Struct = InitialTable->GetRowStruct();
+    if (!CanStoreOCA(Working, Students, Error)) return false;
+    for (const FProfessorStudent& Student : Students)
+    {
+        FStructOnScope Payload(Struct);
+        if (!Student.PaperReference.IsEmpty())
+        {
+            const uint8* Template = nullptr;
+            for (const auto& Pair : InitialTable->GetRowMap())
+                if (ReadString(Struct, Pair.Value, TEXT("Reference_Number")) == Student.PaperReference) { Template = Pair.Value; break; }
+            if (!Template) { Error = TEXT("The saved paper reference is unavailable: ") + Student.PaperReference; return false; }
+            Struct->CopyScriptStruct(Payload.GetStructMemory(), Template);
+        }
+        uint8* Row = Payload.GetStructMemory();
+        WriteString(Struct, Row, TEXT("StudentName"), Student.StudentName);
+        WriteString(Struct, Row, TEXT("StudentID"), Student.StudentID);
+        WriteString(Struct, Row, TEXT("Reference_Number"), Student.ReferenceNumber);
+        WriteOCA(Struct, Row, Student.OCA);
+        WriteNumber(Struct, Row, TEXT("ExamScore"), Student.OEA);
+        WriteNumber(Struct, Row, TEXT("ExpectedScore"), Student.bHasExpectedScore ? Student.ExpectedScore : -1);
+        const FProfessorGrade Grade = CalculateGrade(Student.OCA, Student.OEA, Student.bHasOEA);
+        WriteString(Struct, Row, TEXT("Grade"), Grade.Grade);
+        WriteFloat(Struct, Row, TEXT("GPA"), Grade.GPA);
+        WriteFloat(Struct, Row, TEXT("WeightedTotal"), Grade.Total);
+        if (auto* Has = CastField<FBoolProperty>(FindField(Struct, TEXT("HasOEA")))) Has->SetPropertyValue_InContainer(Row, Student.bHasOEA);
+        if (auto* Suspicious = CastField<FBoolProperty>(FindField(Struct, TEXT("IsMarkingSuspicious")))) Suspicious->SetPropertyValue_InContainer(Row, IsSuspicious(Student));
+        Working->AddRow(Student.RowName, *reinterpret_cast<const FTableRowBase*>(Row));
+    }
+    StoreSequence(Working, Next);
+    Result = Working; Error.Empty(); return true;
+}
+
+FStudentSessionSnapshot UGradingStore::CaptureStudentSnapshot() const
+{
+    FStudentSessionSnapshot Snapshot;
+    if (!bInitialized) return Snapshot;
+    Snapshot.FormatVersion = 1; Snapshot.bHasStudentSnapshot = true;
+    Snapshot.Students = Records; Snapshot.NextStudentReferenceNumber = NextReferenceNumber;
+    return Snapshot;
+}
+
+bool UGradingStore::ValidateStudentSnapshot(const FStudentSessionSnapshot& Snapshot, FString& Error)
+{
+    if (Snapshot.FormatVersion != 1 || !Snapshot.bHasStudentSnapshot)
+    { Error = TEXT("Unsupported or absent student snapshot."); return false; }
+    if (!ValidateRecords(Snapshot.Students, Error)) return false;
+    if (Snapshot.NextStudentReferenceNumber < 1) { Error = TEXT("Invalid student reference counter."); return false; }
+    for (const auto& S : Snapshot.Students)
+    {
+        const int32 Index = ReferenceIndex(S.ReferenceNumber);
+        if (Index < 1 || S.ReferenceNumber != TEXT("Student") + FString::FromInt(Index) || Index >= Snapshot.NextStudentReferenceNumber || S.RowName.IsNone())
+        { Error = TEXT("The student snapshot contains an invalid identity or reference counter."); return false; }
+        if (!S.bHasOEA && S.OEA != 0) { Error = TEXT("Missing OEA must have a zero payload."); return false; }
+    }
+    Error.Empty(); return true;
+}
+
+bool UGradingStore::ApplyStudentSnapshot(const FStudentSessionSnapshot& Snapshot, FString& Error)
+{
+    if (!ValidateStudentSnapshot(Snapshot, Error)) return false;
+    TArray<FProfessorStudent> Candidate = Snapshot.Students;
+    AssignRowNames(Candidate);
+    UDataTable* Working = nullptr;
+    if (!BuildSessionTable(Candidate, Snapshot.NextStudentReferenceNumber, Working, Error)) return false;
+    SourceTable = Working; Records = MoveTemp(Candidate);
+    NextReferenceNumber = Snapshot.NextStudentReferenceNumber;
+    AuthoritativeRows.Empty();
+    for (const auto& Student : Records) AuthoritativeRows.Add(Student.RowName, Student);
+    DeletedRowNames.Empty(); DeletedReferenceNumbers.Empty();
+    bInitialized = true; bInvalidSave = false; bLoggedIn = false;
+    LastError.Empty(); Error.Empty();
+    UE_LOG(LogTemp, Display, TEXT("STAGE4 RESTORE students=%d next=%d"), Records.Num(), NextReferenceNumber);
+    return true;
 }
 
 bool UGradingStore::SaveRecords(const TArray<FProfessorStudent>& NewRecords, FString& Error)
 {
     if (!bLoggedIn) { Error = TEXT("Log in before saving grades."); return false; }
     if (!bInitialized) { Error = TEXT("Student data is not ready."); return false; }
-    if (bInvalidSave) { Error = LastError; return false; }
     TArray<FProfessorStudent> Candidate = NewRecords;
-    int32 CandidateNext = FMath::Max(NextReferenceNumber, ReadSequence(SourceTable));
-    for (const FString& Ref : DeletedReferenceNumbers) CandidateNext = FMath::Max(CandidateNext, ReferenceIndex(Ref) + 1);
+    int32 CandidateNext = NextReferenceNumber;
+    TSet<FString> Seen;
     for (FProfessorStudent& Student : Candidate)
     {
-        Student.StudentName.TrimStartAndEndInline();
-        Student.StudentID.TrimStartAndEndInline();
-        const FProfessorStudent* Existing = Records.FindByPredicate([&Student](const FProfessorStudent& S)
+        Student.StudentName.TrimStartAndEndInline(); Student.StudentID.TrimStartAndEndInline();
+        if (!Student.bHasOEA) Student.OEA = 0;
+        const FProfessorStudent* Existing = Records.FindByPredicate([&Student](const FProfessorStudent& S) { return !Student.ReferenceNumber.IsEmpty() && S.ReferenceNumber == Student.ReferenceNumber; });
+        if (Existing)
         {
-            return !Student.ReferenceNumber.IsEmpty() ? S.ReferenceNumber == Student.ReferenceNumber : (!Student.RowName.IsNone() && S.RowName == Student.RowName);
-        });
-        if (Existing) Student.ReferenceNumber = Existing->ReferenceNumber;
+            if (Seen.Contains(Existing->ReferenceNumber)) { Error = TEXT("Duplicate student reference."); return false; }
+            Seen.Add(Existing->ReferenceNumber);
+            Student.PaperReference = Existing->PaperReference;
+            Student.ExpectedScore = Existing->ExpectedScore; Student.bHasExpectedScore = Existing->bHasExpectedScore;
+        }
         else
         {
+            if (!Student.ReferenceNumber.IsEmpty()) { Error = TEXT("An edited student no longer exists in this session."); return false; }
             if (CandidateNext >= MAX_int32) { Error = TEXT("Student reference sequence is exhausted."); return false; }
             Student.ReferenceNumber = TEXT("Student") + FString::FromInt(CandidateNext++);
+            Student.PaperReference.Empty(); Student.ExpectedScore = 0; Student.bHasExpectedScore = false;
         }
     }
-    RestoreAuthoritativeScores(Candidate);
     AssignRowNames(Candidate);
     if (!ValidateRecords(Candidate, Error)) return false;
-    TArray<FName> CandidateDeletedRows = DeletedRowNames;
-    TArray<FString> CandidateDeletedReferences = DeletedReferenceNumbers;
-    for (const FProfessorStudent& Original : Records)
-    {
-        if (!Candidate.ContainsByPredicate([&Original](const FProfessorStudent& Student) { return Student.ReferenceNumber == Original.ReferenceNumber; }))
-            CandidateDeletedReferences.AddUnique(Original.ReferenceNumber);
-    }
-    CandidateDeletedRows.RemoveAll([&Candidate](FName Name)
-    {
-        return Candidate.ContainsByPredicate([Name](const FProfessorStudent& Student) { return Student.RowName == Name; });
-    });
-
-    if (UGameplayStatics::DoesSaveGameExist(SaveSlot, 0))
-    {
-        UProfessorGradeSave* Previous = Cast<UProfessorGradeSave>(UGameplayStatics::LoadGameFromSlot(SaveSlot, 0));
-        FString ValidationError;
-        if (!ValidateSave(Previous, ValidationError))
-        {
-            bInvalidSave = true;
-            LastError = Error = TEXT("The previous save is unreadable; it has not been overwritten.");
-            return false;
-        }
-        if (!UGameplayStatics::SaveGameToSlot(Previous, BackupSlot, 0))
-        {
-            Error = TEXT("Could not back up previous grades. Nothing was changed.");
-            return false;
-        }
-    }
-
-    UProfessorGradeSave* Saved = Cast<UProfessorGradeSave>(UGameplayStatics::CreateSaveGameObject(UProfessorGradeSave::StaticClass()));
-    Saved->Students = Candidate;
-    Saved->DeletedRowNames = CandidateDeletedRows;
-    Saved->DeletedReferenceNumbers = CandidateDeletedReferences;
-    Saved->NextReferenceNumber = CandidateNext;
-    if (!ValidateSave(Saved, Error)) return false;
-    UDataTable* ValidationTable = DuplicateObject<UDataTable>(SourceTable, GetTransientPackage());
-    if (!ApplySavedRecordsToTable(ValidationTable, Saved, Error)) return false;
-    if (!UGameplayStatics::SaveGameToSlot(Saved, SaveSlot, 0))
-    {
-        Error = TEXT("Could not save grades. Your edits remain open; check disk space and try again.");
-        return false;
-    }
-    Records = MoveTemp(Candidate);
-    DeletedRowNames = MoveTemp(CandidateDeletedRows);
-    DeletedReferenceNumbers = MoveTemp(CandidateDeletedReferences);
-    NextReferenceNumber = CandidateNext;
-    ApplyToDataTable();
-    LastError.Empty();
-    Error.Empty();
+    UDataTable* Working = nullptr;
+    if (!BuildSessionTable(Candidate, CandidateNext, Working, Error)) return false;
+    SourceTable = Working; Records = MoveTemp(Candidate); NextReferenceNumber = CandidateNext;
+    LastError.Empty(); Error.Empty();
+    UE_LOG(LogTemp, Display, TEXT("STAGE4 COMMIT students=%d next=%d"), Records.Num(), NextReferenceNumber);
     return true;
 }
 
 void UGradingStore::ApplyToDataTable()
 {
-    UProfessorGradeSave* Snapshot = NewObject<UProfessorGradeSave>();
-    Snapshot->Students = Records;
-    Snapshot->DeletedRowNames = DeletedRowNames;
-    Snapshot->DeletedReferenceNumbers = DeletedReferenceNumbers;
-    Snapshot->NextReferenceNumber = NextReferenceNumber;
-    FString Error;
-    if (!ApplySavedRecordsToTable(SourceTable, Snapshot, Error)) LastError = Error;
+    UDataTable* Working = nullptr;
+    if (BuildSessionTable(Records, NextReferenceNumber, Working, LastError)) SourceTable = Working;
 }
 
 bool UGradingStore::ApplySavedRecordsToTable(UDataTable* Table, const UProfessorGradeSave* Saved, FString& Error)
 {
     if (!Table || !Table->GetRowStruct()) { Error = TEXT("Student DataTable is unavailable."); return false; }
-    if (!ValidateSave(Saved, Error)) return false;
+    if (!ValidateSave(Saved, Error) || !CanStoreOCA(Table, Saved->Students, Error)) return false;
     const UScriptStruct* Struct = Table->GetRowStruct();
     if (!CastField<FStrProperty>(FindField(Struct, TEXT("StudentName")))
         || !CastField<FStrProperty>(FindField(Struct, TEXT("StudentID")))
@@ -679,7 +751,7 @@ bool UGradingStore::ApplySavedRecordsToTable(UDataTable* Table, const UProfessor
         WriteString(Struct, *Row, TEXT("StudentName"), Student.StudentName);
         WriteString(Struct, *Row, TEXT("StudentID"), Student.StudentID);
         WriteString(Struct, *Row, TEXT("Reference_Number"), Student.ReferenceNumber);
-        WriteNumber(Struct, *Row, TEXT("CA_Score"), Student.OCA);
+        WriteOCA(Struct, *Row, Student.OCA);
         WriteNumber(Struct, *Row, TEXT("ExamScore"), Student.OEA);
         const FProfessorGrade Grade = CalculateGrade(Student.OCA, Student.OEA, Student.bHasOEA);
         WriteString(Struct, *Row, TEXT("Grade"), Grade.Grade);

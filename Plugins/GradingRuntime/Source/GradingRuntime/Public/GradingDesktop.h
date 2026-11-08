@@ -44,6 +44,7 @@ private:
     UPROPERTY() UTextBlock* GPALabel = nullptr;
     UFUNCTION() void ScoresChanged(const FText& Text);
     UFUNCTION() void RequestDelete();
+    bool ReadOCA(float& Value) const;
     void RefreshGrade();
 };
 

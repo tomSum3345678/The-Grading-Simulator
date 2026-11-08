@@ -209,78 +209,7 @@ FString UGradingSetupLibrary::NormalizeStudentRows()
 
 FString UGradingSetupLibrary::SyncSavedGrades(bool Force)
 {
-    using namespace GradingSetup;
-    if (GEditor && GEditor->PlayWorld) return TEXT("WAIT: Synchronization resumes after Play In Editor ends.");
-    const FString SaveFilename = FPaths::ProjectSavedDir() / TEXT("SaveGames/ProfessorGrades_v1.sav");
-    if (!IFileManager::Get().FileExists(*SaveFilename)) return TEXT("NO_SAVE: No saved professor grades exist yet.");
-    const FDateTime SaveTimestamp = IFileManager::Get().GetTimeStamp(*SaveFilename);
-    UDataTable* Students = LoadObject<UDataTable>(nullptr, TEXT("/Game/DataTable/DT_Students.DT_Students"));
-    if (!Students) return TEXT("ERROR: Cannot load DT_Students for grade synchronization.");
-    FString Error;
-
-    if (PendingSaveTable.IsValid())
-    {
-        UDataTable* Pending = PendingSaveTable.Get();
-        if (Pending->GetTableAsJSON() != PendingTableJSON)
-        {
-            // An author edited the asset after our import. Their explicit save takes priority;
-            // do not silently replace or save their unfinished edits on a timer.
-            if (Pending->GetOutermost()->IsDirty()) return TEXT("WAIT: DT_Students was edited after importing grades. Save or undo those editor changes before synchronization resumes.");
-            PendingSaveTable.Reset();
-            PendingTableJSON.Empty();
-            return TEXT("UP_TO_DATE: Explicitly saved DataTable edits take priority over the pending game import.");
-        }
-        if (SaveTimestamp > PendingSaveTimestamp)
-        {
-            // A second game save may arrive while the first import is waiting for the game
-            // to release the .uasset. Import it before saving; otherwise our newer asset
-            // timestamp would incorrectly hide this later save forever.
-            UProfessorGradeSave* Newest = Cast<UProfessorGradeSave>(UGameplayStatics::LoadGameFromSlot(TEXT("ProfessorGrades_v1"), 0));
-            if (!UGradingStore::ValidateSave(Newest, Error)) return TEXT("ERROR: Newer saved grades are invalid; the previous import will not overwrite them: ") + Error;
-            FDataTableEditorUtils::BroadcastPreChange(Pending, FDataTableEditorUtils::EDataTableChangeInfo::RowList);
-            const bool bApplied = UGradingStore::ApplySavedRecordsToTable(Pending, Newest, Error);
-            FDataTableEditorUtils::BroadcastPostChange(Pending, FDataTableEditorUtils::EDataTableChangeInfo::RowList);
-            if (!bApplied) return TEXT("ERROR: Newer saved grades could not be imported; disk synchronization is paused: ") + Error;
-            Pending->MarkPackageDirty();
-            PendingSaveTimestamp = SaveTimestamp;
-            PendingTableJSON = Pending->GetTableAsJSON();
-        }
-        if (!CanReplaceAsset(PendingSaveTable.Get())) return TEXT("WAIT: Saved grades are visible in DT_Students; close the running game to finish writing its asset file.");
-        if (!Save(PendingSaveTable.Get(), Error)) return TEXT("ERROR: ") + Error;
-        LastProcessedTimestamp = PendingSaveTimestamp;
-        PendingSaveTable.Reset();
-        PendingTableJSON.Empty();
-        return TEXT("OK: Saved professor grades synchronized to DT_Students and written to disk.");
-    }
-
-    const FString AssetFilename = FPackageName::LongPackageNameToFilename(Students->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension());
-    if (!Force && (SaveTimestamp <= LastProcessedTimestamp || SaveTimestamp <= IFileManager::Get().GetTimeStamp(*AssetFilename))) return TEXT("UP_TO_DATE: DT_Students already contains these saved grades or newer editor changes.");
-    if (Students->GetOutermost()->IsDirty()) return TEXT("WAIT: Save or revert your existing DT_Students editor changes before importing game grades.");
-    UProfessorGradeSave* SavedGrades = Cast<UProfessorGradeSave>(UGameplayStatics::LoadGameFromSlot(TEXT("ProfessorGrades_v1"), 0));
-    if (!UGradingStore::ValidateSave(SavedGrades, Error)) return TEXT("ERROR: Saved grades were not imported: ") + Error;
-
-    const FString BackupFolder = FPaths::ProjectSavedDir() / TEXT("GradingMigration/BeforeSaveSync");
-    IFileManager::Get().MakeDirectory(*BackupFolder, true);
-    if (!Backup(Students, BackupFolder, Error)) return TEXT("ERROR: ") + Error;
-    const FString SaveBackup = BackupFolder / TEXT("ProfessorGrades_v1.sav");
-    if (!IFileManager::Get().FileExists(*SaveBackup) && IFileManager::Get().Copy(*SaveBackup, *SaveFilename, false, false) != COPY_OK) return TEXT("ERROR: Cannot back up the professor save before synchronization.");
-    const FString JSONBackup = BackupFolder / TEXT("DT_Students.before.json");
-    if (!IFileManager::Get().FileExists(*JSONBackup) && !FFileHelper::SaveStringToFile(Students->GetTableAsJSON(), *JSONBackup)) return TEXT("ERROR: Cannot back up current student values before synchronization.");
-
-    FDataTableEditorUtils::BroadcastPreChange(Students, FDataTableEditorUtils::EDataTableChangeInfo::RowList);
-    const bool bApplied = UGradingStore::ApplySavedRecordsToTable(Students, SavedGrades, Error);
-    FDataTableEditorUtils::BroadcastPostChange(Students, FDataTableEditorUtils::EDataTableChangeInfo::RowList);
-    if (!bApplied) return TEXT("ERROR: Saved grades were not imported: ") + Error;
-    Students->MarkPackageDirty();
-    PendingSaveTable = Students;
-    PendingSaveTimestamp = SaveTimestamp;
-    PendingTableJSON = Students->GetTableAsJSON();
-    if (!CanReplaceAsset(Students)) return TEXT("WAIT: Saved grades are visible in DT_Students; close the running game to finish writing its asset file.");
-    if (!Save(Students, Error)) return TEXT("ERROR: ") + Error;
-    PendingSaveTable.Reset();
-    PendingTableJSON.Empty();
-    LastProcessedTimestamp = SaveTimestamp;
-    return FString::Printf(TEXT("OK: Saved professor grades synchronized to DT_Students (%d rows) and written to disk."), Students->GetRowMap().Num());
+    return TEXT("DISABLED: Game saves belong to a session. Initial DT_Students is never synchronized from player saves.");
 }
 
 FString UGradingSetupLibrary::Install()
@@ -314,19 +243,23 @@ FString UGradingSetupLibrary::Install()
     if (Problems.Num()) return TEXT("ERROR restoring original student data: ") + FString::Join(Problems, TEXT("; "));
     FIntProperty* Expected = CastField<FIntProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("ExpectedScore")));
     FBoolProperty* HasOEA = CastField<FBoolProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("HasOEA")));
-    FIntProperty* OCA = CastField<FIntProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("CA_Score")));
+    FNumericProperty* OCA = CastField<FNumericProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("CA_Score")));
     FIntProperty* OEA = CastField<FIntProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("ExamScore")));
     FStrProperty* Grade = CastField<FStrProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("Grade")));
     FFloatProperty* GPA = CastField<FFloatProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("GPA")));
     FFloatProperty* Total = CastField<FFloatProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("WeightedTotal")));
     FBoolProperty* Suspicious = CastField<FBoolProperty>(FStructureEditorUtils::GetPropertyByFriendlyName(Struct, TEXT("IsMarkingSuspicious")));
     if (!Expected || !HasOEA || !OCA || !OEA || !Grade || !GPA || !Total || !Suspicious) return TEXT("ERROR: Student property types do not match the required schema.");
+    if (!CastField<FIntProperty>(OCA) && !CastField<FFloatProperty>(OCA)) return TEXT("ERROR: CA_Score must be Integer or Float.");
     for (const auto& Pair : Students->GetRowMap())
     {
         uint8* Row = Pair.Value;
         if (!bHadExpected) Expected->SetPropertyValue_InContainer(Row, -1);
         if (!bHadHasOEA) HasOEA->SetPropertyValue_InContainer(Row, true);
-        const FProfessorGrade Result = UGradingStore::CalculateGrade(OCA->GetPropertyValue_InContainer(Row), OEA->GetPropertyValue_InContainer(Row), HasOEA->GetPropertyValue_InContainer(Row));
+        const void* OCAValue = OCA->ContainerPtrToValuePtr<void>(Row);
+        const float OCAAmount = OCA->IsInteger() ? static_cast<float>(OCA->GetSignedIntPropertyValue(OCAValue))
+            : static_cast<float>(OCA->GetFloatingPointPropertyValue(OCAValue));
+        const FProfessorGrade Result = UGradingStore::CalculateGrade(OCAAmount, OEA->GetPropertyValue_InContainer(Row), HasOEA->GetPropertyValue_InContainer(Row));
         Grade->SetPropertyValue_InContainer(Row, Result.Grade);
         GPA->SetPropertyValue_InContainer(Row, Result.GPA);
         Total->SetPropertyValue_InContainer(Row, Result.Total);

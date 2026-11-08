@@ -95,7 +95,7 @@ TSharedRef<SWidget> UGradingStudentEditorRow::RebuildWidget()
         // Keep the last saved RowName in Original while editing. Save resolves the
         // original record before normalizing its key from the edited student name.
         IDInput = Input(WidgetTree, Original.StudentID, bEditMode);
-        OCAInput = Input(WidgetTree, FString::FromInt(Original.OCA), bEditMode);
+        OCAInput = Input(WidgetTree, FString::SanitizeFloat(Original.OCA), bEditMode);
         OEAInput = Input(WidgetTree, Original.bHasOEA ? FString::FromInt(Original.OEA) : TEXT(""), bEditMode);
         OEAInput->SetHintText(FText::FromString(TEXT("Not entered")));
         GradeLabel = Text(WidgetTree, TEXT(""));
@@ -126,6 +126,19 @@ void UGradingStudentEditorRow::SetColumnScale(float Scale)
     }
 }
 
+bool UGradingStudentEditorRow::ReadOCA(float& Value) const
+{
+    if (!OCAInput) return false;
+    const FString Text = OCAInput->GetText().ToString().TrimStartAndEnd();
+    // Formatting must not alter an untouched stored float when saving a name/ID/OEA edit.
+    if (Text == FString::SanitizeFloat(Original.OCA))
+    {
+        Value = Original.OCA;
+        return FMath::IsFinite(Value) && Value >= 0.f && Value <= 100.f;
+    }
+    return UGradingStore::TryParseOCA(Text, Value);
+}
+
 bool UGradingStudentEditorRow::ReadStudent(FProfessorStudent& Student, FString& Error) const
 {
     if (!NameInput || !IDInput || !OCAInput || !OEAInput)
@@ -141,9 +154,9 @@ bool UGradingStudentEditorRow::ReadStudent(FProfessorStudent& Student, FString& 
         Error = TEXT("Enter a name and student ID for every row.");
         return false;
     }
-    if (!GradingDesktop::Score(OCAInput->GetText().ToString(), Student.OCA))
+    if (!ReadOCA(Student.OCA))
     {
-        Error = FString::Printf(TEXT("%s: OCA must be a whole number from 0 to 100."), *Student.StudentID);
+        Error = FString::Printf(TEXT("%s: OCA must be a number from 0 to 100 (decimals allowed)."), *Student.StudentID);
         return false;
     }
     const FString OEA = OEAInput->GetText().ToString().TrimStartAndEnd();
@@ -178,10 +191,11 @@ void UGradingStudentEditorRow::RequestDelete()
 
 void UGradingStudentEditorRow::RefreshGrade()
 {
-    int32 OCA = 0, OEA = 0;
+    float OCA = 0.f;
+    int32 OEA = 0;
     const FString OEAText = OEAInput->GetText().ToString().TrimStartAndEnd();
     const bool bHasOEA = !OEAText.IsEmpty();
-    if (!GradingDesktop::Score(OCAInput->GetText().ToString(), OCA) || (bHasOEA && !GradingDesktop::Score(OEAText, OEA)))
+    if (!ReadOCA(OCA) || (bHasOEA && !GradingDesktop::Score(OEAText, OEA)))
     {
         GradeLabel->SetText(FText::FromString(TEXT("Invalid")));
         GradeLabel->SetColorAndOpacity(FSlateColor(GradingDesktop::Warning));
@@ -281,7 +295,7 @@ void UGradingDesktopPanel::NativeConstruct()
     if (!bRowsInitialized)
     {
         RebuildRows();
-        ShowStatus(Store && !Store->GetLastError().IsEmpty() ? Store->GetLastError() : TEXT("Choose Edit to change grades or add students. Save keeps your changes after restarting."), Store && !Store->GetLastError().IsEmpty());
+        ShowStatus(Store && !Store->GetLastError().IsEmpty() ? Store->GetLastError() : TEXT("Choose Edit to change grades or add students. Save applies edits to this session; F6 saves the game."), Store && !Store->GetLastError().IsEmpty());
     }
 }
 
@@ -386,7 +400,7 @@ void UGradingDesktopPanel::Save()
     Draft = Store->GetRecords();
     bEditMode = false;
     RebuildRows();
-    ShowStatus(TEXT("Saved. These grades will be loaded when you restart the game."));
+    ShowStatus(TEXT("Applied to this session. Press F6 outside the computer to save the game."));
 }
 
 void UGradingDesktopPanel::Cancel()
