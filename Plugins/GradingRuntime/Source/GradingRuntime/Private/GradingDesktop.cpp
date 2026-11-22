@@ -501,8 +501,8 @@ TSharedRef<SWidget> UGradingLoginGate::RebuildWidget()
 void UGradingLoginGate::NativeConstruct()
 {
     Super::NativeConstruct();
-    if (AccountInput && GetVisibility() != ESlateVisibility::Collapsed && (!Store || !Store->IsLoggedIn()))
-        AccountInput->SetKeyboardFocus();
+    // if (AccountInput && GetVisibility() != ESlateVisibility::Collapsed && (!Store || !Store->IsLoggedIn()))
+    //     AccountInput->SetKeyboardFocus();
 }
 
 void UGradingLoginGate::SubmitLogin()
@@ -511,14 +511,14 @@ void UGradingLoginGate::SubmitLogin()
     {
         ErrorLabel->SetText(FText::FromString(TEXT("Incorrect account or password.")));
         PasswordInput->SetText(FText::GetEmpty());
-        PasswordInput->SetKeyboardFocus();
+        // PasswordInput->SetKeyboardFocus();
         return;
     }
     PasswordInput->SetText(FText::GetEmpty());
     if (Apps) { Apps->SetVisibility(ESlateVisibility::Visible); Apps->SetIsEnabled(true); Apps->SetActiveWidgetIndex(0); }
     if (Home) Home->SetIsEnabled(true);
     SetVisibility(ESlateVisibility::Collapsed);
-    if (Desktop) Desktop->SetKeyboardFocus();
+    // if (Desktop) Desktop->SetKeyboardFocus();
 }
 
 void UGradingLoginGate::PasswordCommitted(const FText& Text, ETextCommit::Type Method)
