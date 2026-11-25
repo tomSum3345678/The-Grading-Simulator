@@ -211,7 +211,9 @@ void UGradingStudentEditorRow::RefreshGrade()
 void UGradingDesktopPanel::Configure(UGradingStore* InStore)
 {
     Store = InStore;
-    if (Store) Draft = Store->GetRecords();
+    if (Store && !bEditMode) {
+        Draft = Store->GetRecords(); RebuildRows();
+    }
 }
 
 TSharedRef<SWidget> UGradingDesktopPanel::RebuildWidget()
@@ -534,7 +536,11 @@ void UGradingDesktopLibrary::InstallDesktop(UUserWidget* Desktop)
     UCanvasPanel* Canvas = Cast<UCanvasPanel>(Desktop->GetWidgetFromName(TEXT("DesktopCanvas")));
     UButton* Home = Cast<UButton>(Desktop->GetWidgetFromName(TEXT("HomeButton")));
     if (!Store || !Apps || !Canvas || Apps->GetChildrenCount() < 3) return;
-    if (Cast<UGradingDesktopPanel>(Apps->GetChildAt(2))) return;
+    if (auto* Grades = Cast<UGradingDesktopPanel>(Apps->GetChildAt(2)))
+    {
+        Grades->Configure(Store);
+        return;
+    }
     Store->InitializeRecords(LoadObject<UDataTable>(nullptr, TEXT("/Game/DataTable/DT_Students.DT_Students")));
     const int32 ActiveIndex = Apps->GetActiveWidgetIndex();
     UGradingDesktopPanel* Grades = CreateWidget<UGradingDesktopPanel>(Desktop);

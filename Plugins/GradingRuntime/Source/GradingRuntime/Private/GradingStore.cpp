@@ -638,6 +638,38 @@ bool UGradingStore::SaveRecords(const TArray<FProfessorStudent>& NewRecords, FSt
     return true;
 }
 
+bool UGradingStore::SetPaperScores(
+    FName StudentRowName, const TMap<FString, int32>& QuestionScores)
+{
+    if (!bInitialized) return false;
+
+    int64 Total = 0;
+    for (const auto& Question : QuestionScores)
+    {
+        if (Question.Value < 0) return false;
+        Total += Question.Value;
+    }
+    if (Total > 100) return false;
+
+    TArray<FProfessorStudent> Updated = Records;
+    FProfessorStudent* Student = Updated.FindByPredicate(
+        [StudentRowName](const FProfessorStudent& Row) {
+            return Row.RowName == StudentRowName;
+        });
+    if (!Student) return false;
+
+    Student->OEA = static_cast<int32>(Total);
+    Student->bHasOEA = QuestionScores.Num() > 0;
+
+    UDataTable* Table = nullptr;
+    FString Error;
+    if (!BuildSessionTable(Updated, NextReferenceNumber, Table, Error)) return false;
+
+    Records = MoveTemp(Updated);
+    SourceTable = Table;
+    return true;
+}
+
 void UGradingStore::ApplyToDataTable()
 {
     UDataTable* Working = nullptr;
