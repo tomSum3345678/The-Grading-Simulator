@@ -100,6 +100,7 @@ public:
     static bool ValidateStudentSnapshot(const FStudentSessionSnapshot& Snapshot, FString& Error);
     const TArray<FProfessorStudent>& GetRecords() const { return Records; }
     UFUNCTION(BlueprintCallable, Category="Grading") bool SaveRecords(const TArray<FProfessorStudent>& NewRecords, FString& Error);
+    UFUNCTION(BlueprintCallable, Category="Grading") bool SetPaperScores(FName StudentRowName, const TMap<FString, int32>& QuestionScores);
     UFUNCTION(BlueprintPure, Category="Grading") static FProfessorGrade CalculateGrade(float OCA, int32 OEA, bool bHasOEA);
     UFUNCTION(BlueprintPure, Category="Grading") static bool IsSuspicious(const FProfessorStudent& Student);
     // Decimal OCA only; OEA keeps its separate integer parser.
