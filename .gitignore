@@ -18,7 +18,7 @@ Saved/
 /Config/User*
 
 
-# 忽略特定資源資料夾
+# 忽略特定資源資料夾、第三方 Fab 素材、音效原始檔等等，避免違反授權條款
 Content/Office_Pack_Vol_1/
-
+Content/ExternalAssets/
 /Docs/
